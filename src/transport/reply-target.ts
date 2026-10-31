@@ -59,20 +59,55 @@ export function resolveReplyTarget(
  * 带 eventId 时通过 bot.send 的 extra 填 event_id（SDK sendMarkdown 不支持）；
  * 否则走 sendMarkdown 填 msg_id。
  */
-export function sendResolvedMarkdown(
+export async function sendResolvedMarkdown(
   bot: QQBot,
   target: ReplyTarget,
   content: string,
   opts?: { keyboard?: InlineKeyboard },
 ): Promise<unknown> {
-  if (target.eventId) {
-    return bot.send({
-      target: { scope: target.scope, targetId: target.targetId, msgId: undefined },
-      msgType: MsgType.MARKDOWN,
-      markdown: { content },
-      keyboard: opts?.keyboard,
-      extra: { event_id: target.eventId },
-    });
+  const trySend = async (tgt: ReplyTarget) => {
+    if (tgt.eventId) {
+      return bot.send({
+        target: { scope: tgt.scope, targetId: tgt.targetId, msgId: undefined },
+        msgType: MsgType.MARKDOWN,
+        markdown: { content },
+        keyboard: opts?.keyboard,
+        extra: { event_id: tgt.eventId },
+      });
+    }
+    return bot.sendMarkdown(tgt, content, opts);
+  };
+
+  try {
+    const res = await trySend(target);
+    console.log(
+      `[qqsend] sendResolvedMarkdown OK (scope=${target.scope}, targetId=${target.targetId}, msgId=${target.msgId ?? 'none'}, eventId=${target.eventId ?? 'none'})`,
+    );
+    return res;
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[qqsend] sendResolvedMarkdown 初次发送失败 (msgId=${target.msgId ?? 'none'}, eventId=${target.eventId ?? 'none'}): ${errMsg}`,
+    );
+
+    // 若原带有被动回复标识 (msgId 或 eventId)，自动降级为主动推送重发保底
+    if (target.msgId || target.eventId) {
+      const fallbackTarget: ReplyTarget = {
+        ...target,
+        msgId: undefined,
+        eventId: undefined,
+      };
+      console.warn(`[qqsend] 尝试主动推送降级重发 (targetId=${target.targetId})...`);
+      try {
+        const fallbackRes = await trySend(fallbackTarget);
+        console.log(`[qqsend] 主动推送降级重发成功！`);
+        return fallbackRes;
+      } catch (retryErr) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        console.error(`[qqsend] 主动推送降级重发亦失败: ${retryMsg}`);
+        throw retryErr;
+      }
+    }
+    throw err;
   }
-  return bot.sendMarkdown(target, content, opts);
 }
