@@ -113,6 +113,10 @@ export async function bootstrapGateway(
   // 交付物投递：present 声明的文件在轮末发送到当前会话（outbound 路由触发）
   const deliverablesDeliverer = new DeliverablesDeliverer(sender, mediaSender, config, logger);
 
+    // Sovereign Hooks: 暴露 qqbotSender 与 mediaSender 供 @dsh/qq-plus 与 @dsh/rvc 等伴随插件使用
+  (ctx as unknown as { provide(name: string, service: unknown): void }).provide('qqbotSender', sender);
+  (ctx as unknown as { provide(name: string, service: unknown): void }).provide('qqbotMediaSender', mediaSender);
+
   const outbound = createOutboundHandler(manager, sender, config, logger, toolsRegistry, deliverablesDeliverer);
   (ctx as unknown as { on(event: string, handler: (...args: unknown[]) => void): void })
     .on('session/event', outbound.routeSessionEvent as (...args: unknown[]) => void);
