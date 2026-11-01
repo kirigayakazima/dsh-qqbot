@@ -19,9 +19,25 @@ export interface StreamSessionLike {
   complete(): Promise<unknown>;
 }
 
+/** 发送 Markdown 时的可选控制参数 */
+export interface SendMarkdownOptions {
+  keyboard?: InlineKeyboard;
+  /** 显式消息引用配置 */
+  messageReference?: {
+    message_id: string;
+    ignore_get_message_error?: boolean;
+  };
+  /** 指定被引用的消息 ID */
+  refMsgId?: string;
+  /** 是否开启引用回复卡片（设为 false 可显式关闭） */
+  quoteReply?: boolean;
+  extra?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 /** QQ Bot 发送接口 */
 export interface QQBotSender {
-  sendMarkdown(target: ReplyTarget, content: string, opts?: { keyboard?: InlineKeyboard }): Promise<unknown>;
+  sendMarkdown(target: ReplyTarget, content: string, opts?: SendMarkdownOptions): Promise<unknown>;
   openStream(target: ReplyTarget): StreamSessionLike;
 }
 
@@ -81,8 +97,11 @@ export class OutboundBuffer {
 
       // 降级：静态发送（writer 不存在 or 流式失败）
       const chunks = chunkMarkdownText(this.buffer, this.limit);
-      for (const chunk of chunks) {
-        await this.bot.sendMarkdown(this.record.replyTarget, chunk);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (chunk === undefined) continue;
+        const opts: SendMarkdownOptions | undefined = i === 0 ? undefined : { quoteReply: false };
+        if (opts !== undefined) { await this.bot.sendMarkdown(this.record.replyTarget, chunk, opts); } else { await this.bot.sendMarkdown(this.record.replyTarget, chunk); }
         console.log(
           `[qqsend] OutboundBuffer.flush sent ${chunk.length} chars to ${this.record.replyTarget.scope}:${this.record.replyTarget.targetId}`,
         );

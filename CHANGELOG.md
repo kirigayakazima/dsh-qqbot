@@ -6,6 +6,24 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [0.5.6] - 2026-11-01
+
+### 新功能与主权增强
+
+- **原生支持 QQ 引用回复 (`message_reference`)**：
+  - 打通底层 `bot.send` 对 `message_reference: { message_id, ignore_get_message_error: true }` 的完整支持；
+  - 彻底解决此前出站消息仅携带 `msg_id` 被动回复配额凭证而无法在 QQ 客户端渲染出“引用框/气泡”的问题；
+  - 默认出站回复自动带出当前消息的引用卡片；设置 `ignore_get_message_error: true`，在引用消息被撤回或过期时安全降级为普通文本，绝不导致 400 失败。
+- **正文标签指定引用与主动关闭**：
+  - 支持在发言正文中书写 `<reply id="消息ID" />`（或 `<qqbot-reply id="..." />`、`<quote id="..." />`）显式引用历史特定消息，发送时自动提取 ID 并剔除标签；
+  - 支持正文带有 `<no-reply />` / `<no-quote />` 或出站参数 `opts.quoteReply: false`，主动关闭引用回复卡片。
+- **出站分段防刷屏去重**：
+  - 在 `OutboundBuffer.flush`、`OutboundRouter.send` 以及伴随插件 `qq-plus` 中增加引用门控：长消息分段打字时**仅第 1 段携带引用回复框**，第 2 段及后续切片自动禁用 `quoteReply`，杜绝重复引用小卡片刷屏。
+- **自动定位活跃会话 Target**：
+  - `mediaSender`（图片/视频/语音/文件发送）在省略 target 时自动回退至当前最新活跃会话（`manager.findLatestSession()`）。
+- **OpenID 双向加密与 Mention 规范对齐**：
+  - 文档明晰 QQ 开放平台 `(QQ_UIN, group_openid, bot_appId)` 双向加密机制，机器人在群内出站发送 `<@对方OpenID>` 即可渲染为蓝色原生 `@` 气泡。
+
 ## [0.5.5] - 2026-10-30
 
 ### 问题修复

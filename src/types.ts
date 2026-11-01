@@ -12,6 +12,10 @@ export interface ReplyTarget {
   msgId?: string;
   /** 互动事件 id（带 INTERACTION_CREATE 前缀），填 event_id 字段，与 msgId 互斥 */
   eventId?: string;
+  /** 显式引用的消息 ID（指定回复特定消息）；若未提供且 quoteReply 不为 false，则默认使用 msgId */
+  refMsgId?: string;
+  /** 是否在回复中生成引用卡片（默认在存在引用目标时为 true） */
+  quoteReply?: boolean;
 }
 
 /** SDK 原始消息附件（snake_case 字段，来自 QQ 网关 C2C_MESSAGE_CREATE） */

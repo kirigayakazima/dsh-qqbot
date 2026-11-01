@@ -8,7 +8,7 @@ import type { SessionManager, SessionRecord } from '../session/index.ts';
 import type { ImQQBotConfig } from '../config.ts';
 import type { Logger } from '../types.ts';
 import { chunkMarkdownText } from './chunker.ts';
-import { OutboundBuffer, type QQBotSender } from './outbound-buffer.ts';
+import { OutboundBuffer, type QQBotSender, type SendMarkdownOptions } from './outbound-buffer.ts';
 import { formatToolResult, type ToolsRegistryLike, type ToolResultData } from './tool-presenter.ts';
 import type { DeliverablesDelivererLike } from './deliverables.ts';
 import {
@@ -283,9 +283,12 @@ class OutboundRouter {
   /** 统一发送：切分 + 逐 chunk 发送 + 错误记录 */
   private async send(record: SessionRecord, text: string, tag: string): Promise<void> {
     const chunks = chunkMarkdownText(text, this.config.textChunkLimit);
-    for (const chunk of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (chunk === undefined) continue;
+      const opts: SendMarkdownOptions | undefined = i === 0 ? undefined : { quoteReply: false };
       try {
-        await this.bot.sendMarkdown(record.replyTarget, chunk);
+        if (opts !== undefined) { await this.bot.sendMarkdown(record.replyTarget, chunk, opts); } else { await this.bot.sendMarkdown(record.replyTarget, chunk); }
         console.log(
           `[qqsend] OutboundRouter.send [${tag}] sent ${chunk.length} chars to ${record.replyTarget.scope}:${record.replyTarget.targetId}`,
         );

@@ -1,6 +1,6 @@
 # @tencent-connect/dsh-qqbot (DSHA 主权增强分支)
 
-> **定位**: 本仓库是腾讯官方 [`tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot) 的 DSHA 主权 Fork 分支（基于 upstream v0.5.5 稳定发布版，发布版本号 `0.5.5-sovereign.1`）。作为 DeepSeek Harness (dsh) 与 QQ 官方开放平台的协议桥梁，支持全双工会话、富媒体与双端自治智能体协同。
+> **定位**: 本仓库是腾讯官方 [`tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot) 的 DSHA 主权 Fork 分支（基于 upstream v0.5.5 稳定发布版，发布版本号 `0.5.6-sovereign.1`）。作为 DeepSeek Harness (dsh) 与 QQ 官方开放平台的协议桥梁，支持全双工会话、富媒体与双端自治智能体协同。
 
 ---
 
@@ -17,6 +17,17 @@
    - 打包脚本自动解析并内联 `@deepseek-ai/schemastery`、`@deepseek-ai/cosmokit` 及全部间接依赖，解决 Node ESM 裸导入在独立目录或软链接下报 `ERR_MODULE_NOT_FOUND` 的问题，确保手机 Proot 环境纯离线零网络可用。
 5. **拟人化唤醒门控增强 (Dynamic Wake Gate)**：
    - 基于 SDK 原生 `isImplicitMention` 契约，支持小满与阿醒角色唤醒词（`小满`、`妹妹`、`满宝`、`阿醒`、`姐姐`）及斜杠命令静默唤醒，免去每次强制手工 `@bot` 的生硬体验。
+7. **原生 QQ 引用回复与消息引用透传 (`message_reference`)**：
+   - 彻底打通腾讯 QQ 开放平台 `message_reference: { message_id, ignore_get_message_error: true }` 协议；
+   - 默认出站回复自动带出当前消息的引用卡片；
+   - 支持在正文书写 `<reply id="消息ID" />`（或 `<qqbot-reply id="..." />`、`<quote id="..." />`）指定回复特定消息，并自动剔除正文标签；
+   - 支持 `<no-reply />` 或 `opts.quoteReply: false` 关闭引用；
+   - 多段打字切分场景中仅第 1 段携带引用，后续切片自动禁用引用，杜绝群内重复卡片刷屏；
+   - 初次被动回复或引用失败时，自动清除引用与 msgId 并降级为主动单发重发保底。
+8. **OpenID 双向交互规范与 Mention 判定准则**：
+   - 腾讯开放平台对于群成员的 OpenID 采用 `(QQ_UIN, group_openid, bot_appId)` 双向派生加密哈希机制，机器人彼此看到的对方 openid 是不同的且永久固定；
+   - 出站时发送 `<@对方OpenID>` 可在 QQ 客户端渲染为蓝色的真正 `@` 气泡；
+   - 入站唤醒门控统一支持正文中的 `<@appId>`、真实 mention 事件以及角色唤醒词。
 6. **上游 v0.5.5 完整加固特性**：
    - **会话 ID 加固**：统一规范化前缀，彻底解决旧版本并发或特定宿主环境下 `findBySessionId` 无法匹配导致“DSHA 有内容但 QQ 未送达”的问题；
    - **流式可控性**：配置文件与 `cordis.patch.yml` 显式支持 `streaming: false`，避免私聊流式吞字与缓冲异常；
