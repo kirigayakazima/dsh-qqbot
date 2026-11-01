@@ -659,6 +659,16 @@ export class SessionManager {
     return undefined;
   }
 
+  findLatestSession(): SessionRecord | undefined {
+    let latest: SessionRecord | undefined;
+    for (const record of this.sessions.values()) {
+      if (!latest || record.lastActivity > latest.lastActivity) {
+        latest = record;
+      }
+    }
+    return latest;
+  }
+
   async remove(scope: ChatScope, peerId: string): Promise<void> {
     const key = this.sessionKey(scope, peerId);
     const record = this.sessions.get(key);

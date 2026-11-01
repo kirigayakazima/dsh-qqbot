@@ -20,7 +20,7 @@ import { ApprovalChannel, type ApprovalChannelContext } from '../features/approv
 import { decodeButtonData } from '../features/button-utils.ts';
 import { buildUserAgent } from '../shared/index.ts';
 import type { ImQQBotConfig } from '../config.ts';
-import type { ChatScope, Logger } from '../types.ts';
+import type { ChatScope, Logger, ReplyTarget } from '../types.ts';
 import { setupMiddlewares } from './middleware-setup.ts';
 import { startMediaCleanup } from '../media/media-cleaner.ts';
 import { ensureVisionInputModal, registerDescribeImageTool } from '../media/vision-tool.ts';
@@ -103,11 +103,18 @@ export async function bootstrapGateway(
   // ── 附件发送适配器（qqbot_send_file 工具与交付物投递共用） ──
   // 包装 bot：让文件发送也走 msgId 兜底 + 被动回复限额管控。
   // 注意：SDK 文件发送暂不支持 event_id，故 allowEvent=false，跳过 event 候选。
+  const resolveTarget = (t?: ReplyTarget): ReplyTarget => {
+    if (t && t.scope && t.targetId) return t;
+    const latest = manager.findLatestSession();
+    if (latest) return latest.replyTarget;
+    throw new Error('mediaSender: no target provided and no active QQ session found');
+  };
+
   const mediaSender: MediaSenderLike = {
-    sendImage: (target, source) => bot.sendImage(resolveReplyTarget(target, replyLimiter, false), source),
-    sendVideo: (target, source) => bot.sendVideo(resolveReplyTarget(target, replyLimiter, false), source),
-    sendVoice: (target, source) => bot.sendVoice(resolveReplyTarget(target, replyLimiter, false), source),
-    sendFile: (target, source, opts) => bot.sendFile(resolveReplyTarget(target, replyLimiter, false), source, opts),
+    sendImage: (target, source) => bot.sendImage(resolveReplyTarget(resolveTarget(target), replyLimiter, false), source),
+    sendVideo: (target, source) => bot.sendVideo(resolveReplyTarget(resolveTarget(target), replyLimiter, false), source),
+    sendVoice: (target, source) => bot.sendVoice(resolveReplyTarget(resolveTarget(target), replyLimiter, false), source),
+    sendFile: (target, source, opts) => bot.sendFile(resolveReplyTarget(resolveTarget(target), replyLimiter, false), source, opts),
   };
 
   // 交付物投递：present 声明的文件在轮末发送到当前会话（outbound 路由触发）
