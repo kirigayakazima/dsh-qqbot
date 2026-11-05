@@ -18,6 +18,7 @@ export interface StreamingWriterDeps {
   logger: Logger;
   /** 节流间隔（ms）：连续 append 累积后，停顿该间隔才 update */
   throttleMs: number;
+  signal?: AbortSignal;
 }
 
 export class StreamingWriter {
@@ -34,7 +35,10 @@ export class StreamingWriter {
 
   public constructor(deps: StreamingWriterDeps) {
     this.deps = deps;
+    if (deps.signal?.aborted) this.abort();
+    else deps.signal?.addEventListener('abort', this.onAbort, { once: true });
   }
+  private readonly onAbort = (): void => { this.abort(); };
 
   /** 是否应降级为静态发送：从未成功发送过任何分片 */
   public get shouldFallback(): boolean {
@@ -85,25 +89,26 @@ export class StreamingWriter {
 
     // 立即把最终累积文本入队（覆盖节流未触发的场景）
     this.enqueue();
-    await this.chain;
-
-    // 只要 session 存在就 complete（关闭流式消息，无论是否降级）
-    if (this.session) {
-      try {
-        await this.session.complete();
-      } catch (err) {
-        this.deps.logger.error(
-          `im-qqbot: stream complete failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+    try {
+      await this.chain;
+      if (this.aborted) return;
+      // A semantic adapter's complete actually sends; errors must remain observable.
+      if (this.session) {
+        try { await this.session.complete(); }
+        catch (err) {
+          this.deps.logger.error(`im-qqbot: stream complete failed: ${err instanceof Error ? err.message : String(err)}`);
+          throw err;
+        }
       }
-    }
+    } finally { this.deps.signal?.removeEventListener('abort', this.onAbort); }
   }
 
   /** 中止（异常/取消）：关闭已打开的流式会话，避免悬挂 */
   public abort(): void {
-    if (this.finished) return;
+    if (this.aborted) return;
     this.finished = true;
     this.aborted = true;
+    this.deps.signal?.removeEventListener('abort', this.onAbort);
 
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
@@ -114,7 +119,8 @@ export class StreamingWriter {
     this.chain = this.chain.then(async () => {
       if (this.session) {
         try {
-          await this.session.complete();
+          if (this.session.abort) await this.session.abort();
+          else await this.session.complete();
         } catch (err) {
           this.deps.logger.error(
             `im-qqbot: stream abort complete failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -135,7 +141,9 @@ export class StreamingWriter {
 
     if (!this.session) {
       try {
-        this.session = this.deps.bot.openStream(this.deps.target);
+        this.session = this.deps.signal
+          ? this.deps.bot.openStream(this.deps.target, { signal: this.deps.signal })
+          : this.deps.bot.openStream(this.deps.target);
         this.deps.logger.debug(`im-qqbot: stream opened (chars=${this.fullText.length})`);
       } catch (err) {
         // openStream 失败：标记 failed 避免重复尝试，后续走降级静态

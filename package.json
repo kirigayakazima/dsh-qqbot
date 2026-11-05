@@ -1,6 +1,6 @@
 {
   "name": "@tencent-connect/dsh-qqbot",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "icon": "./assets/icons/qq_logo.svg",
   "description": "在 QQ 私聊和群聊里直接对话 DeepSeek Harness。 Chat with DeepSeek Harness in QQ private and group chats.",
   "type": "module",
@@ -41,7 +41,7 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=20.3.0"
+    "node": ">=22"
   },
   "repository": {
     "type": "git",
@@ -59,11 +59,8 @@
       "platform": "web"
     },
     "compatibility": {
-      "dshReleases": {
-        "0.1.0-rc.8": "compatible",
-        "0.2.0-rc.2": "compatible"
-      },
-      "note": "0.1.0-rc.8 为 CLI（dsh web）已验证：扫码/手动/解绑全流程、终端二维码与端内绑定页；0.2.0-rc.2 为 Desktop 内嵌运行时已验证：端内绑定页（settings.section 与侧栏）、HMR 重载收敛。客户端依赖 settings.section / sidebarRightTabs / sidebar.right.pane.tab 席位契约与 dsh.client 模块系统，宿主大版本升级后请重新验收席位行为。"
+      "dshReleases": {},
+      "note": "0.5.7候选以Node24和Build190为验收目标，目前仅本地验证；早期宿主兼容记录属于之前版本，不作为本候选实机通过证明。"
     }
   },
   "dependencies": {

@@ -63,7 +63,7 @@ describe('OutboundBuffer', () => {
     await buffer.flush();
 
     expect(bot.openStream).not.toHaveBeenCalled();
-    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, 'hello');
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, 'hello', { signal: expect.any(AbortSignal) });
   });
 
   it('流式开启但 openStream 失败 → 降级静态 sendMarkdown', async () => {
@@ -77,7 +77,7 @@ describe('OutboundBuffer', () => {
     await buffer.flush();
 
     // 流式从未成功发送 → 降级静态
-    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, 'hello');
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, 'hello', { signal: expect.any(AbortSignal) });
   });
 
   it('cancel → abort 关闭会话', async () => {

@@ -26,6 +26,7 @@ import { startMediaCleanup } from '../media/media-cleaner.ts';
 import { ensureVisionInputModal, registerDescribeImageTool } from '../media/vision-tool.ts';
 import { registerSendFileTool, type MediaSenderLike } from '../media/send-file-tool.ts';
 import { DeliverablesDeliverer } from '../transport/deliverables.ts';
+import { sessionReplyTarget } from '../transport/session-target.ts';
 
 /**
  * interaction 统一分发器：按 button_data 的顶层 `t` 判别字段，路由到对应
@@ -122,9 +123,15 @@ export async function bootstrapGateway(
 
     // Sovereign Hooks: 暴露 qqbotSender 与 mediaSender 供 @dsh/qq-plus 与 @dsh/rvc 等伴随插件使用
   (ctx as unknown as { provide(name: string, service: unknown): void }).provide('qqbotSender', sender);
-  (ctx as unknown as { provide(name: string, service: unknown): void }).provide('qqbotMediaSender', mediaSender);
+  (ctx as unknown as { provide(name: string, service: unknown): void }).provide('qqbotMediaSender', {
+    ...mediaSender,
+    resolveTargetForSession: (sessionId: string) => sessionReplyTarget(manager, sessionId),
+  });
 
   const outbound = createOutboundHandler(manager, sender, config, logger, toolsRegistry, deliverablesDeliverer);
+  manager.cancelOutput = (sessionId) => outbound.cancelSession(sessionId);
+  manager.describeConversation = (record) => sender.describeConversation?.(record.replyTarget);
+  ctx.effect(() => () => outbound.dispose());
   (ctx as unknown as { on(event: string, handler: (...args: unknown[]) => void): void })
     .on('session/event', outbound.routeSessionEvent as (...args: unknown[]) => void);
 

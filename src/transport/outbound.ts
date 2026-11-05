@@ -34,6 +34,8 @@ export type OutboundHandler = (session: SessionLike, event: RawSessionEvent) => 
 
 /** 出站事件入口集合：durable 事件 + 实时流式帧 */
 export interface OutboundHandlers {
+  cancelSession(sessionId: string): void;
+  dispose(): void;
   /** durable session 事件入口（注册到 ctx.on('session/event')） */
   routeSessionEvent(session: SessionLike, event: RawSessionEvent): void;
   /**
@@ -49,6 +51,7 @@ export interface SessionLike {
 
 /** 工具调用记录（tool/call 建立，tool/result 消费） */
 interface ToolCallRecord {
+  sessionId: string;
   name: string;
   args: string;
 }
@@ -60,6 +63,9 @@ const SILENT_TURN_ERROR_CODES = new Set(['STREAM_CLOSED']);
  * 出站路由器：持有会话级状态，按事件类型分发到处理器
  */
 class OutboundRouter {
+  private readonly controllers = new Map<string, AbortController>();
+  private readonly cancelledSessions = new Set<string>();
+  private readonly turns = new Map<string, number>();
   private readonly buffers = new Map<string, OutboundBuffer>();
   private readonly toolCalls = new Map<string, ToolCallRecord>();
   /** 每会话当前流式 attemptId：LLM 重试会发布新 attempt，用于 reset 与迟到帧过滤 */
@@ -98,11 +104,20 @@ class OutboundRouter {
 
   /** 事件分发入口 */
   public route(session: SessionLike, raw: RawSessionEvent): void {
-    const event = parseEvent(raw);
-    if (event === undefined) return;
-
     const record = this.manager.findBySessionId(session.header.id);
     if (record === undefined) return;
+    const turn = typeof raw.data.turn === 'number' && Number.isSafeInteger(raw.data.turn) ? raw.data.turn : undefined;
+    const currentTurn = this.turns.get(session.header.id);
+    if (raw.type === 'turn/start') {
+      if (turn !== undefined && currentTurn !== undefined && turn <= currentTurn) return;
+      this.cancelSession(session.header.id);
+      this.cancelledSessions.delete(session.header.id);
+      if (turn !== undefined) this.turns.set(session.header.id, turn);
+      return;
+    }
+    if (turn !== undefined && currentTurn !== undefined && turn !== currentTurn) return;
+    const event = parseEvent(raw);
+    if (event === undefined || this.cancelledSessions.has(session.header.id)) return;
 
     switch (event.type) {
       case 'assistant/chunk':
@@ -112,7 +127,7 @@ class OutboundRouter {
         this.onMessage(session.header.id, record, event);
         break;
       case 'tool/call':
-        this.onToolCall(event);
+        this.onToolCall(session.header.id, event);
         break;
       case 'tool/result':
         this.onToolResult(record, event);
@@ -142,6 +157,13 @@ class OutboundRouter {
    * attempt 的尾巴混进新内容。
    */
   public routeStreamFrame(agentId: string, delta: StreamDelta): void {
+    const record = this.manager.findBySessionId(agentId);
+    if (record === undefined) return;
+    if (this.cancelledSessions.has(agentId)) return;
+    const turn = this.turns.get(agentId);
+    if (turn !== undefined && delta.turn !== undefined && turn !== delta.turn) return;
+    // Revision counters can restart on agent replacement. Keep the host's start/reset semantics;
+    // only use the durable turn boundary and attempt identity to reject stale output here.
     if (delta.kind === 'attempt-start') {
       this.streamAttempts.set(agentId, delta.attemptId);
       this.buffers.get(agentId)?.reset();
@@ -156,8 +178,6 @@ class OutboundRouter {
       return;
     }
 
-    const record = this.manager.findBySessionId(agentId);
-    if (record === undefined) return;
     this.appendChunk(agentId, record, delta.text);
   }
 
@@ -165,7 +185,7 @@ class OutboundRouter {
   private appendChunk(sessionId: string, record: SessionRecord, text: string): void {
     let buffer = this.buffers.get(sessionId);
     if (buffer === undefined) {
-      buffer = new OutboundBuffer(record, this.bot, this.config.textChunkLimit, this.logger, this.shouldStream(record));
+      buffer = new OutboundBuffer(record, this.bot, this.config.textChunkLimit, this.logger, this.shouldStream(record), this.signalFor(sessionId));
       this.buffers.set(sessionId, buffer);
     }
     buffer.append(text);
@@ -204,14 +224,15 @@ class OutboundRouter {
   }
 
   /** 工具调用：仅记录，不发送（避免刷屏，等待结果） */
-  private onToolCall(event: ToolCallEvent): void {
-    this.toolCalls.set(event.callId, { name: event.name, args: event.arguments });
+  private onToolCall(sessionId: string, event: ToolCallEvent): void {
+    this.toolCalls.set(`${sessionId}:${event.callId}`, { sessionId, name: event.name, args: event.arguments });
   }
 
   /** 工具结果：错误始终发送，成功结果按开关 */
   private onToolResult(record: SessionRecord, event: ToolResultEvent): void {
-    const call = this.toolCalls.get(event.callId);
-    this.toolCalls.delete(event.callId);
+    const key = `${record.sessionId}:${event.callId}`;
+    const call = this.toolCalls.get(key);
+    this.toolCalls.delete(key);
     if (call === undefined) return;
 
     if (event.error === undefined && !this.config.showToolResults) return;
@@ -248,6 +269,11 @@ class OutboundRouter {
    * 外层轮次失败不撤销已完成的声明（宿主契约），故失败轮的文件仍投递。
    */
   private onTurnEnd(sessionId: string, record: SessionRecord, event: TurnEndEvent): void {
+    if (event.reason.kind === 'interrupted' || event.reason.kind === 'cancelled') {
+      this.cancelSession(sessionId);
+      return;
+    }
+    const signal = this.signalFor(sessionId);
     const buffer = this.buffers.get(sessionId);
     // 文本 flush 可等待，保证回复先于交付文件到达用户
     let flushTask: Promise<void> = Promise.resolve();
@@ -270,6 +296,7 @@ class OutboundRouter {
     const failure = extractTurnError(event.reason);
     void (async () => {
       await Promise.all([flushTask, pending]);
+      if (signal.aborted) return;
       if (failure !== undefined && !SILENT_TURN_ERROR_CODES.has(failure.code)) {
         await this.send(record, `⚠️ 本轮异常结束\n\`${failure.code}\`: ${failure.message}`, 'sendTurnEndError');
       }
@@ -282,13 +309,17 @@ class OutboundRouter {
 
   /** 统一发送：切分 + 逐 chunk 发送 + 错误记录 */
   private async send(record: SessionRecord, text: string, tag: string): Promise<void> {
+    const signal = this.signalFor(record.sessionId);
+    const target = { ...record.replyTarget };
     const chunks = chunkMarkdownText(text, this.config.textChunkLimit);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
+      if (signal.aborted) return;
       if (chunk === undefined) continue;
-      const opts: SendMarkdownOptions | undefined = i === 0 ? undefined : { quoteReply: false };
+      const opts: SendMarkdownOptions = i === 0 ? { signal } : { quoteReply: false, signal };
       try {
-        if (opts !== undefined) { await this.bot.sendMarkdown(record.replyTarget, chunk, opts); } else { await this.bot.sendMarkdown(record.replyTarget, chunk); }
+        const result = await this.bot.sendMarkdown(target, chunk, opts);
+        if (signal.aborted || (result as { cancelled?: boolean } | undefined)?.cancelled) return;
         console.log(
           `[qqsend] OutboundRouter.send [${tag}] sent ${chunk.length} chars to ${record.replyTarget.scope}:${record.replyTarget.targetId}`,
         );
@@ -296,8 +327,37 @@ class OutboundRouter {
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[qqsend] OutboundRouter.send [${tag}] failed: ${errMsg}`);
         this.logger.error(`im-qqbot: ${tag} failed: ${errMsg}`);
+        return;
       }
     }
+  }
+  private signalFor(sessionId: string): AbortSignal {
+    let controller = this.controllers.get(sessionId);
+    if (!controller) { controller = new AbortController(); this.controllers.set(sessionId, controller); }
+    return controller.signal;
+  }
+  public cancelSession(sessionId: string): void {
+    this.controllers.get(sessionId)?.abort();
+    this.controllers.delete(sessionId);
+    this.buffers.get(sessionId)?.cancel();
+    this.buffers.delete(sessionId);
+    this.streamAttempts.delete(sessionId);
+    this.presentedFiles.delete(sessionId);
+    this.presentedCalls.delete(sessionId);
+    this.pendingText.delete(sessionId);
+    const record = this.manager.findBySessionId(sessionId);
+    for (const [key, call] of this.toolCalls) if (call.sessionId === sessionId) this.toolCalls.delete(key);
+    if (record) {
+      this.cancelledSessions.add(sessionId);
+      try { this.bot.cancelConversation?.(record.replyTarget); }
+      catch { this.logger.warn('companion cancellation hook failed'); }
+    }
+    else { this.cancelledSessions.delete(sessionId); this.turns.delete(sessionId); }
+  }
+  public dispose(): void {
+    for (const id of new Set([...this.controllers.keys(), ...this.buffers.keys()])) this.cancelSession(id);
+    this.cancelledSessions.clear();
+    this.turns.clear();
   }
 }
 
@@ -318,6 +378,8 @@ export function createOutboundHandler(
 ): OutboundHandlers {
   const router = new OutboundRouter(manager, bot, config, logger, toolsRegistry, deliverer);
   return {
+    cancelSession: (id) => router.cancelSession(id),
+    dispose: () => router.dispose(),
     routeSessionEvent: (session, event) => router.route(session, event),
     routeStreamFrame: (agentId, delta) => router.routeStreamFrame(agentId, delta),
   };

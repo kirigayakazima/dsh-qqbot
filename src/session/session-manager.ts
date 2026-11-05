@@ -112,6 +112,9 @@ export class SessionManager {
   public questionChannel?: QuestionChannel;
   /** 由 bootstrap 注入的审批通道（approval/request → QQ），会话回收时清理其待批审批 */
   public approvalChannel?: ApprovalChannel;
+  /** Optional companion hooks, resolved late; never own the session or permissions. */
+  public cancelOutput?: (sessionId: string) => void;
+  public describeConversation?: (record: SessionRecord) => { text: string } | undefined;
 
   constructor(
     ctx: Context,
@@ -133,6 +136,7 @@ export class SessionManager {
       (key, record) => {
         this.logger.info(`evicting idle session: key=${key}`);
         this.sessions.delete(key);
+        this.cancelOutput?.(record.sessionId);
         record.agent.cancel({ kind: 'user' });
         void record.handle.dispose().catch(() => {});
         // 回收会话时统一清理其待答问题/待批审批，避免 pending 悬挂泄漏
@@ -164,11 +168,16 @@ export class SessionManager {
       if (!record) return assembled;
 
       const prompt = record.scope === 'group' ? this.config.groupPrompt : this.config.directPrompt;
-      if (!prompt) return assembled;
+      let conversation: { text: string } | undefined;
+      try { conversation = this.describeConversation?.(record); }
+      catch { this.logger.warn('conversation description unavailable; using base prompt'); }
+      if (!prompt && !conversation?.text) return assembled;
 
       return {
         ...assembled,
-        sections: [...(assembled.sections ?? []), { name: 'qqbot:scope-prompt', order: 90, text: prompt }],
+        sections: [...(assembled.sections ?? []),
+          ...(prompt ? [{ name: 'qqbot:scope-prompt', order: 90, text: prompt }] : []),
+          ...(conversation?.text ? [{ name: 'qqbot:conversation', order: 91, text: conversation.text }] : [])],
       };
     };
 
@@ -308,6 +317,7 @@ export class SessionManager {
     if (boundary === undefined) {
       this.logger.warn(`fork unavailable (no completed turn), fallback to dispose: key=${key}`);
       this.sessions.delete(key);
+      this.cancelOutput?.(record.sessionId);
       record.agent.cancel({ kind: 'user' });
       await record.handle.dispose().catch(() => {});
       return;
@@ -317,6 +327,7 @@ export class SessionManager {
     if (seed === undefined) {
       this.logger.warn(`fork seed unavailable (old host), fallback to dispose: key=${key}`);
       this.sessions.delete(key);
+      this.cancelOutput?.(record.sessionId);
       record.agent.cancel({ kind: 'user' });
       await record.handle.dispose().catch(() => {});
       return;
@@ -676,6 +687,7 @@ export class SessionManager {
 
     if (!record) return;
     this.sessions.delete(key);
+    this.cancelOutput?.(record.sessionId);
     record.agent.cancel({ kind: 'user' });
     await record.handle.dispose().catch(() => {});
     this.logger.info(`session removed: key=${key}`);
@@ -748,6 +760,7 @@ export class SessionManager {
     const records = [...this.sessions.values()];
     this.sessions.clear();
     for (const record of records) {
+      this.cancelOutput?.(record.sessionId);
       record.agent.cancel({ kind: 'user' });
     }
     await Promise.allSettled(records.map((r) => r.handle.dispose()));

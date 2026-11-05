@@ -17,10 +17,12 @@ const STREAM_THROTTLE_MS = 200;
 export interface StreamSessionLike {
   update(content: string): Promise<unknown>;
   complete(): Promise<unknown>;
+  abort?(): Promise<unknown> | void;
 }
 
 /** 发送 Markdown 时的可选控制参数 */
 export interface SendMarkdownOptions {
+  signal?: AbortSignal;
   keyboard?: InlineKeyboard;
   /** 显式消息引用配置 */
   messageReference?: {
@@ -38,7 +40,10 @@ export interface SendMarkdownOptions {
 /** QQ Bot 发送接口 */
 export interface QQBotSender {
   sendMarkdown(target: ReplyTarget, content: string, opts?: SendMarkdownOptions): Promise<unknown>;
-  openStream(target: ReplyTarget): StreamSessionLike;
+  openStream(target: ReplyTarget, options?: { signal?: AbortSignal }): StreamSessionLike;
+  cancelConversation?(target: ReplyTarget): void;
+  describeConversation?(target: ReplyTarget): { text: string; [key: string]: unknown };
+  conversationDiagnostics?(): Record<string, unknown>;
 }
 
 export class OutboundBuffer {
@@ -49,6 +54,9 @@ export class OutboundBuffer {
   private readonly bot: QQBotSender;
   private readonly limit: number;
   private readonly logger: Logger;
+  private readonly controller = new AbortController();
+  private readonly signal: AbortSignal;
+  private readonly target: import('../types.ts').ReplyTarget;
 
   public constructor(
     record: SessionRecord,
@@ -56,18 +64,22 @@ export class OutboundBuffer {
     limit: number,
     logger: Logger,
     streamingEnabled: boolean,
+    signal?: AbortSignal,
   ) {
     this.record = record;
     this.bot = bot;
     this.limit = limit;
     this.logger = logger;
+    this.signal = signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal;
+    this.target = { ...record.replyTarget };
     this.writer = streamingEnabled
-      ? new StreamingWriter({ bot, target: record.replyTarget, logger, throttleMs: STREAM_THROTTLE_MS })
+      ? new StreamingWriter({ bot, target: { ...record.replyTarget }, logger, throttleMs: STREAM_THROTTLE_MS, signal: this.signal })
       : null;
   }
 
   /** 追加文本增量 */
   public append(text: string): void {
+    if (this.signal.aborted) return;
     this.buffer += text;
     this.writer?.append(text);
   }
@@ -85,12 +97,13 @@ export class OutboundBuffer {
 
   /** 发送所有累积文本：流式优先，降级静态 */
   public async flush(): Promise<void> {
-    if (this.flushing || !this.buffer.trim()) return;
+    if (this.signal.aborted || this.flushing || !this.buffer.trim()) return;
     this.flushing = true;
 
     try {
       if (this.writer) {
         await this.writer.finish();
+        if (this.signal.aborted) return;
         // 流式成功（未降级）→ 直接返回
         if (!this.writer.shouldFallback) return;
       }
@@ -99,9 +112,11 @@ export class OutboundBuffer {
       const chunks = chunkMarkdownText(this.buffer, this.limit);
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
+        if (this.signal.aborted) return;
         if (chunk === undefined) continue;
-        const opts: SendMarkdownOptions | undefined = i === 0 ? undefined : { quoteReply: false };
-        if (opts !== undefined) { await this.bot.sendMarkdown(this.record.replyTarget, chunk, opts); } else { await this.bot.sendMarkdown(this.record.replyTarget, chunk); }
+        const opts: SendMarkdownOptions = i === 0 ? { signal: this.signal } : { quoteReply: false, signal: this.signal };
+        const result = await this.bot.sendMarkdown(this.target, chunk, opts);
+        if (this.signal.aborted || (result as { cancelled?: boolean } | undefined)?.cancelled) return;
         console.log(
           `[qqsend] OutboundBuffer.flush sent ${chunk.length} chars to ${this.record.replyTarget.scope}:${this.record.replyTarget.targetId}`,
         );
@@ -118,6 +133,7 @@ export class OutboundBuffer {
 
   /** 取消（异常/丢弃），中止流式并清空缓冲 */
   public cancel(): void {
+    this.controller.abort();
     this.writer?.abort();
     this.buffer = '';
   }

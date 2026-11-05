@@ -155,7 +155,7 @@ describe('OutboundRouter.routeStreamFrame', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(bot.openStream).not.toHaveBeenCalled();
-    expect(bot.sendMarkdown).toHaveBeenCalledWith(groupTarget, 'group reply');
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(groupTarget, 'group reply', { signal: expect.any(AbortSignal) });
   });
 
   it('assistant/message 到达时收尾流式：complete 且不重复静态发送', async () => {
@@ -295,7 +295,7 @@ describe('OutboundRouter: deliverables/presented', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, expect.stringContaining('E_BROKEN'));
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, expect.stringContaining('E_BROKEN'), { signal: expect.any(AbortSignal) });
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 

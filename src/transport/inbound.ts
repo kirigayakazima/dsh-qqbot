@@ -134,6 +134,7 @@ export async function handleInbound(
     source: { kind: 'user' as const },
   });
 
+  manager.cancelOutput?.(record.sessionId);
   record.agent.followup(message);
   logger.info(`→ followup sent: key=${scope}:${peerId}`);
 
