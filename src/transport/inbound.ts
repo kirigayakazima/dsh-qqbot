@@ -193,7 +193,7 @@ function isEmptyMessage(
   wasMentioned: boolean,
 ): boolean {
   if (userContent) return false;
-  if (attachments && attachments.length > 0) return false;
+  if (attachments?.some(att => !isVoiceContentType(att.content_type))) return false;
   if (isGroup && wasMentioned) return false;
   return true;
 }
@@ -259,35 +259,19 @@ function buildUserMessage(
 }
 
 /**
- * Layer 4: 媒体元数据上下文（图片/视频/文件本地路径 + 语音 ASR + 引用附件）
+ * Layer 4: 媒体元数据上下文（图片/视频/文件本地路径 + 引用附件）
  */
 function buildDynamicCtx(msg: ProcessedMessage, state: MiddlewareState): string {
   const lines: string[] = [];
 
   if (msg.attachments && msg.attachments.length > 0) {
     const downloadedByFilename = new Map((state.downloadedFiles ?? []).map(d => [d.filename, d]));
-    const voices: RawAttachment[] = [];
-
     // 一次遍历归类 + 生成媒体行
     for (const att of msg.attachments) {
       const kind = classifyContentType(att.content_type);
-      if (kind === 'voice') {
-        voices.push(att);
-        continue;
-      }
+      if (kind === 'voice') continue;
       const d = downloadedByFilename.get(att.filename);
       lines.push(`- ${renderMediaLine(kind, att.filename, d?.localPath, att.url, att.size)}`);
-    }
-
-    // 语音：有 ASR 文本才带文本，否则只带链接（纯文本模型无法消费音频）
-    if (voices.length > 0) {
-      const asrTexts = voices.map(a => a.asr_refer_text).filter(Boolean);
-      if (asrTexts.length > 0) {
-        lines.push(`- ASR: ${asrTexts.join(' | ')}`);
-      } else {
-        const urls = voices.map(a => a.url).filter(Boolean);
-        if (urls.length > 0) lines.push(`- Voice: ${urls.join(', ')}`);
-      }
     }
   }
 

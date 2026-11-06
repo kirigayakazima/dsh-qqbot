@@ -68,6 +68,7 @@
     "@tencent-connect/qqbot-nodejs": "^1.0.5",
     "js-yaml": "^4.1.0",
     "qrcode": "^1.5.4",
+    "silk-wasm": "3.7.1",
     "yaml": "2.8.1"
   },
   "peerDependencies": {

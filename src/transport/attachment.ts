@@ -6,7 +6,7 @@
  * 下载目录固定为 ~/.dsh-qqbot/media，
  * 文件名用时间戳+随机数防重名，不依赖 agent cwd，便于 qqbot_describe_image / tool-fs 等工具稳定访问。
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import * as dns from 'node:dns';
@@ -164,7 +164,7 @@ async function download(url: string, maxBytes: number): Promise<Buffer> {
   }
   await assertSafeHostname(parsed.hostname);
 
-  const resp = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+  const resp = await fetch(parsed, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
   const buf = Buffer.from(await resp.arrayBuffer());
@@ -172,6 +172,30 @@ async function download(url: string, maxBytes: number): Promise<Buffer> {
     throw new Error(`Download exceeds ${Math.floor(maxBytes / 1024 / 1024)}MB`);
   }
   return buf;
+}
+
+export async function withVoiceAttachment<T>(
+  attachment: RawAttachment,
+  media: MediaConfig,
+  transcribe: (filePath: string) => Promise<T>,
+): Promise<T> {
+  const maxBytes = (media.maxMB ?? DEFAULT_MAX_MB) * 1024 * 1024;
+  if (attachment.size > maxBytes) throw new Error('Voice attachment exceeds media limit');
+  const audio = await download(attachment.url, maxBytes);
+  const dir = join(MEDIA_ROOT, 'tmp_voice');
+  mkdirSync(dir, { recursive: true });
+  const filePath = join(dir, uniqueFilename('voice'));
+  const file = openSync(filePath, 'wx', 0o600);
+  try {
+    try {
+      writeFileSync(file, audio);
+    } finally {
+      closeSync(file);
+    }
+    return await transcribe(filePath);
+  } finally {
+    unlinkSync(filePath);
+  }
 }
 
 /**

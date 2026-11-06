@@ -37,17 +37,15 @@
 
 ## 🛠️ 构建与部署
 
-### PC 端编译打包并推送到手机端
-```bash
-# 编译 TypeScript 与打包
-pnpm --dir projects/dsh-qqbot run build
-uv run python scripts/deploy_to_phone.py --plugin qqbot
-```
+### QQ 语音条转录
 
-### 手机容器端一键升级
-```bash
-sh /sdcard/dshproject/updates/install_or_update.sh
-```
+启用现有的富媒体开关后，QQBot 优先用 QQ 已提供的转录，其余语音条经手机回环 `127.0.0.1:28765` 请求 FullAwake。PC 在 5 秒内未返回可用转录时，由随包的 `scripts/asr.py` 调用手机 SenseVoice。
+
+离线回退使用 Build190 Proot 的 Python 3.12、`~/.dsh/voice/lib` 下的 sherpa-onnx 和 NumPy，以及 FFmpeg。将 [SenseVoice int8 模型](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) 的 `model.int8.onnx` 和 `tokens.txt` 放到 `~/.dsh/voice/models/sensevoice/`。语音原文用后立即删除，只将转录或未听清提示放入对话。
+
+### Build190 安装
+
+在 PC 上运行 `npm test` 与 `npm run build`。手机安装沿用 DSHA 工作区的 `native_build190_plugins.py` 原生事务，在 Build190 Proot 中先预览再执行审核后的安装命令。
 
 ---
 

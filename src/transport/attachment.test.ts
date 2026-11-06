@@ -1,10 +1,21 @@
 import { afterAll, afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { readFileSync, readdirSync, rmSync } from 'node:fs';
-import { basename, extname } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import * as dns from 'node:dns';
+import { execFile } from 'node:child_process';
+import type { MiddlewareContext } from '@tencent-connect/qqbot-nodejs';
 import { MEDIA_ROOT } from '../media/media-cleaner.ts';
+import { attachmentProcessor } from '../middleware/attachment.ts';
+import type { ImQQBotConfig } from '../config.ts';
+import type { SessionManager } from '../session/index.ts';
 import { downloadMediaAttachments, imageExtension, correctImageExt } from './attachment.ts';
+import { handleInbound } from './inbound.ts';
 import type { Logger } from '../types.ts';
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  execFile: vi.fn(),
+}));
 
 vi.mock('../media/media-cleaner.ts', async () => {
   const { mkdtempSync } = await import('node:fs');
@@ -31,6 +42,60 @@ afterEach(() => {
 
 afterAll(() => {
   rmSync(MEDIA_ROOT, { recursive: true, force: true });
+});
+
+describe('voice attachments', () => {
+  it.each(['pc', 'phone', 'unclear'])('passes only text onward and removes the voice file (%s)', async (channel) => {
+    const voiceDir = join(MEDIA_ROOT, 'tmp_voice');
+    const audio = new Uint8Array(Buffer.from('RIFF-test'));
+    const transcript = { text: '晚上吃什么', duration: 3.2 };
+    vi.stubGlobal('fetch', vi.fn(async (url, request) => {
+      if (new URL(url).hostname === 'example.com') return new Response(audio);
+      expect(String(url)).toBe('http://127.0.0.1:28765/v1/voice/asr');
+      expect(readdirSync(voiceDir)).toHaveLength(1);
+      expect(new Uint8Array(await new Response(request.body).arrayBuffer())).toEqual(audio);
+      return channel === 'pc' ? Response.json({ ok: true, ...transcript }) : new Response(null, { status: 503 });
+    }));
+    vi.mocked(execFile).mockImplementation((_command, _args, _options, callback) => {
+      const stdin = { on: () => stdin, end: (input: Buffer) => {
+        expect(new Uint8Array(input)).toEqual(audio);
+        if (channel === 'phone') callback?.(null, JSON.stringify(transcript), '');
+        else callback?.(new Error('ASR unavailable'), '', '');
+      } };
+      return { stdin } as ReturnType<typeof execFile>;
+    });
+
+    const ctx = {
+      message: {
+        kind: 'c2c', senderId: 'user', messageId: 'voice',
+        attachments: [{
+          filename: 'voice.wav', content_type: 'audio/wav', size: audio.length, url: '//example.com/voice',
+        }],
+      },
+      state: {},
+    } as unknown as MiddlewareContext;
+    const followup = vi.fn();
+    const manager = {
+      getOrCreate: async () => ({ sessionId: 'session', agent: { followup, whenIdle: async () => {} } }),
+    } as unknown as SessionManager;
+    const config = { media: { enabled: true, maxMB: 1, ttlHours: 24 } } as ImQQBotConfig;
+    const next = vi.fn(async () => {
+      expect(readdirSync(voiceDir)).toEqual([]);
+      expect(ctx.state.downloadedFiles).toEqual([]);
+      expect(ctx.state.processedAttachments).toEqual([{
+        type: 'voice',
+        voiceText: channel === 'unclear' ? '[没听清这句语音] 请再发一次' : transcript.text,
+        voiceSource: channel === 'unclear' ? 'fallback' : 'asr',
+        duration: channel === 'unclear' ? undefined : transcript.duration,
+      }]);
+      await handleInbound(ctx, manager, config, logger);
+    });
+    await attachmentProcessor(config, logger)(ctx, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(execFile).toHaveBeenCalledTimes(channel === 'pc' ? 0 : 1);
+    const expected = channel === 'unclear' ? '[Voice message] [没听清这句语音] 请再发一次' : '[Voice message (3.2s)] 晚上吃什么';
+    expect(followup.mock.calls[0]?.[0].content).toEqual([{ type: 'text', text: expected }]);
+  });
 });
 
 describe('downloadMediaAttachments', () => {
