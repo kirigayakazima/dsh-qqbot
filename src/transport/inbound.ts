@@ -105,7 +105,8 @@ export async function handleInbound(
   };
 
   // ── 组装 agentBody（下载结果经 mwState.downloadedFiles 提供） ──
-  const agentBody = assembleAgentBody(msg, mwState, scope, logger);
+  const userContent = buildUserContent(msg, mwState, logger);
+  const agentBody = assembleAgentBody(userContent, msg, mwState, scope);
 
   if (!agentBody) return;
 
@@ -131,7 +132,15 @@ export async function handleInbound(
 
   const message = createUserMessage({
     content,
-    source: { kind: 'user' as const },
+    source: {
+      kind: 'user' as const,
+      qq: {
+        channel: scope === 'group' ? 'group' : 'direct',
+        speaker: msg.senderName?.trim() || (scope === 'group' ? shortSenderId(msg.senderId) : 'user'),
+        start: agentBody.lastIndexOf(userContent),
+        length: userContent.length,
+      },
+    },
   });
 
   manager.cancelOutput?.(record.sessionId);
@@ -159,15 +168,13 @@ export async function handleInbound(
  * 组装 agentBody — AI 实际看到的完整上下文
  */
 function assembleAgentBody(
+  userContent: string,
   msg: ProcessedMessage,
   state: MiddlewareState,
   scope: ChatScope,
-  logger: Logger,
 ): string | null {
   const isGroup = scope === 'group';
   const wasMentioned = state.mention?.wasMentioned ?? false;
-
-  const userContent = buildUserContent(msg, state, logger);
 
   if (isEmptyMessage(userContent, msg.attachments, isGroup, wasMentioned)) return null;
 

@@ -103,8 +103,31 @@ describe('conversation delivery across the driver and QQPlus', () => {
     const ctx = { message: { kind: 'c2c', senderId: 'u', content: '只分析别执行', messageId: 'm', timestamp: '' }, state: {}, bot: {} } as unknown as MiddlewareContext;
     await handleInbound(ctx, manager, {} as ImQQBotConfig, logger());
     expect(order).toEqual(['cancel-output', 'followup']);
-    const message = a.agent.followup.mock.calls[0]?.[0] as { content: Array<{ text: string }> };
+    const message = a.agent.followup.mock.calls[0]?.[0] as { content: Array<{ text: string }>; source: unknown };
     expect(message.content[0]?.text).toContain('只分析别执行');
+    expect(message.source).toEqual({ kind: 'user', qq: { channel: 'direct', speaker: 'user', start: 0, length: 6 } });
+  });
+
+  it('marks the current group speaker and text outside the quoted message and group history', async () => {
+    const followup = vi.fn((_message: unknown) => {});
+    const agent = { followup, whenIdle: async () => {} };
+    const manager = { getOrCreate: async () => ({ agent }) } as unknown as SessionManager;
+    const ctx = {
+      message: { kind: 'group', senderId: 'u', senderName: '小舟', groupOpenid: 'g', content: '我不喜欢香菜', messageId: 'm', timestamp: '' },
+      state: { mention: { wasMentioned: true }, quote: { text: '别人喜欢EVA' },
+        history: [{ senderId: 'v', senderName: '小林', content: '记得周末看展' }] },
+      bot: {},
+    } as unknown as MiddlewareContext;
+    await handleInbound(ctx, manager, {} as ImQQBotConfig, logger());
+    const message = followup.mock.calls[0]?.[0] as {
+      content: Array<{ text: string }>;
+      source: { qq: { channel: string; speaker: string; start: number; length: number } };
+    };
+    const { channel, speaker, start, length } = message.source.qq;
+    expect({ channel, speaker }).toEqual({ channel: 'group', speaker: '小舟' });
+    expect(message.content[0]?.text).toContain('别人喜欢EVA');
+    expect(message.content[0]?.text).toContain('记得周末看展');
+    expect(message.content[0]?.text.slice(start, start + length)).toBe('我不喜欢香菜');
   });
 });
 
