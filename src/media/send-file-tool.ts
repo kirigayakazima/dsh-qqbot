@@ -151,6 +151,11 @@ export function registerSendFileTool(
     },
   };
 
-  tools.register(definition);
+  tools.register({
+    ...definition,
+    async execute(...args: Parameters<typeof definition.execute>) {
+      return JSON.parse(JSON.stringify(await definition.execute(...args)));
+    },
+  });
   logger.info('im-qqbot: qqbot_send_file 工具已注册');
 }

@@ -333,6 +333,11 @@ export function registerDescribeImageTool(ctx: Context, vision: VisionConfig, lo
     },
   };
 
-  tools.register(definition);
+  tools.register({
+    ...definition,
+    async execute(...args: Parameters<typeof definition.execute>) {
+      return JSON.parse(JSON.stringify(await definition.execute(...args)));
+    },
+  });
   logger.info(`im-qqbot: qqbot_describe_image 工具已注册 (provider=${vision.provider} model=${vision.model})`);
 }
